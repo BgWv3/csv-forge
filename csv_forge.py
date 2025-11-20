@@ -2,7 +2,6 @@ import sys
 import csv
 import os
 from difflib import SequenceMatcher
-import intro
 
 import pandas as pd
 from PyQt6.QtWidgets import (
@@ -10,10 +9,10 @@ from PyQt6.QtWidgets import (
     QTableView, QFileDialog, QToolBar, QStatusBar, QMessageBox,
     QTabWidget, QDockWidget, QPushButton, QLabel, QComboBox, 
     QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QProgressBar,
-    QHeaderView, QMenu, QInputDialog
+    QHeaderView, QMenu, QInputDialog, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel
-from PyQt6.QtGui import QAction, QColor, QPalette
+from PyQt6.QtGui import QAction, QColor, QPalette, QCursor
 
 # =============================================================================
 # PANDAS TABLE MODEL
@@ -33,6 +32,8 @@ class DataFrameModel(QAbstractTableModel):
         if index.isValid():
             if role == Qt.ItemDataRole.DisplayRole or role == Qt.ItemDataRole.EditRole:
                 val = self._df.iloc[index.row(), index.column()]
+                # Handle NaN/None gracefully
+                if pd.isna(val): return ""
                 return str(val)
         return None
 
@@ -41,7 +42,9 @@ class DataFrameModel(QAbstractTableModel):
             try:
                 current_dtype = self._df.iloc[:, index.column()].dtype
                 if pd.api.types.is_numeric_dtype(current_dtype):
-                    if '.' in value:
+                    if value == "":
+                        val = None
+                    elif '.' in value:
                         val = float(value)
                     else:
                         val = int(value)
@@ -76,6 +79,38 @@ class DataFrameModel(QAbstractTableModel):
 
     def get_dataframe(self):
         return self._df
+
+    # --- Editing Methods ---
+    def add_row(self):
+        self.layoutAboutToBeChanged.emit()
+        # Add a row filled with None/NaN
+        new_index = len(self._df)
+        self._df.loc[new_index] = [None] * len(self._df.columns)
+        self.layoutChanged.emit()
+
+    def add_column(self, name):
+        self.layoutAboutToBeChanged.emit()
+        self._df[name] = None
+        self.layoutChanged.emit()
+
+    def remove_rows(self, rows):
+        self.layoutAboutToBeChanged.emit()
+        self._df.drop(self._df.index[rows], inplace=True)
+        self._df.reset_index(drop=True, inplace=True)
+        self.layoutChanged.emit()
+
+    def remove_column(self, col_index):
+        self.layoutAboutToBeChanged.emit()
+        col_name = self._df.columns[col_index]
+        self._df.drop(col_name, axis=1, inplace=True)
+        self.layoutChanged.emit()
+
+    def rename_column(self, col_index, new_name):
+        self.layoutAboutToBeChanged.emit()
+        old_name = self._df.columns[col_index]
+        self._df.rename(columns={old_name: new_name}, inplace=True)
+        self.layoutChanged.emit()
+
 
 # =============================================================================
 # UTILITY DIALOGS
@@ -125,10 +160,7 @@ class CSVForge(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
-        
-        # NEW: Connect tab switch to stats update
         self.tabs.currentChanged.connect(self.update_footer_stats)
-        
         self.setCentralWidget(self.tabs)
 
         # Setup UI Components
@@ -194,6 +226,7 @@ class CSVForge(QMainWindow):
             ("Combiner (Stack Files)", self.tool_combiner),
             ("Splitter (Chunk File)", self.tool_splitter),
             ("Joiner (Merge Columns)", self.tool_joiner),
+            ("Remove Exact Duplicates", self.tool_remove_duplicates),
             ("Fuzzy Dedupe (Current)", self.tool_fuzzy_dedupe),
             ("Fuzzy Match (External)", self.tool_fuzzy_match),
         ]
@@ -212,12 +245,10 @@ class CSVForge(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         
-        # NEW: Permanent indicators
         self.lbl_rows = QLabel("Rows: 0")
         self.lbl_cols = QLabel("Cols: 0")
-        self.lbl_mem = QLabel("Mem: 0 KB")
+        self.lbl_mem = QLabel("Mem: 0 MB")
         
-        # Styling for indicators
         style = "padding: 0 10px; font-weight: bold; color: #ccc;"
         self.lbl_rows.setStyleSheet(style)
         self.lbl_cols.setStyleSheet(style)
@@ -232,14 +263,11 @@ class CSVForge(QMainWindow):
         self.status_bar.addPermanentWidget(self.progress)
 
     def update_footer_stats(self):
-        """Update the row/col/memory counts based on active tab"""
         df = self.get_current_df()
         if df is not None:
             rows = df.shape[0]
             cols = df.shape[1]
-            # Calculate memory usage in MB
-            mem_bytes = df.memory_usage(deep=True).sum()
-            mem_mb = mem_bytes / (1024 * 1024)
+            mem_mb = df.memory_usage(deep=True).sum() / (1024 * 1024)
             
             self.lbl_rows.setText(f"Rows: {rows:,}")
             self.lbl_cols.setText(f"Cols: {cols}")
@@ -247,7 +275,7 @@ class CSVForge(QMainWindow):
         else:
             self.lbl_rows.setText("Rows: 0")
             self.lbl_cols.setText("Cols: 0")
-            self.lbl_mem.setText("Mem: 0 KB")
+            self.lbl_mem.setText("Mem: 0 MB")
 
     # --- File Operations ---
     def detect_encoding(self, filepath):
@@ -268,7 +296,6 @@ class CSVForge(QMainWindow):
             
             max_commas = 0
             best_row = 0
-            
             for i, line in enumerate(lines):
                 if not line.strip(): continue 
                 commas = line.count(',')
@@ -276,27 +303,21 @@ class CSVForge(QMainWindow):
                     max_commas = commas
                     best_row = i
             
-            if max_commas > 0:
-                return best_row
-            return None
+            return best_row if max_commas > 0 else None
         except:
             return None
 
     def load_csv(self):
         fnames, _ = QFileDialog.getOpenFileNames(self, "Open CSV", "", "CSV Files (*.csv)")
-        if not fnames:
-            return
+        if not fnames: return
         
         for fname in fnames:
             try:
                 enc = self.detect_encoding(fname)
-                
                 try:
                     df = pd.read_csv(fname, encoding=enc)
                 except pd.errors.ParserError:
-                    print(f"Parser error detected in {fname}. Attempting auto-detect...")
                     skip_rows = self.find_valid_header_row(fname, enc)
-                    
                     if skip_rows is not None and skip_rows > 0:
                         df = pd.read_csv(fname, encoding=enc, skiprows=skip_rows)
                         self.status_bar.showMessage(f"Auto-detected header at row {skip_rows + 1}")
@@ -304,17 +325,13 @@ class CSVForge(QMainWindow):
                         rows, ok = QInputDialog.getInt(self, "Import Error", 
                             "Structure mismatch detected.\nHow many header rows should be skipped?", 
                             0, 0, 100)
-                        if ok:
-                            df = pd.read_csv(fname, encoding=enc, skiprows=rows)
-                        else:
-                            raise
+                        if ok: df = pd.read_csv(fname, encoding=enc, skiprows=rows)
+                        else: raise
                 
                 df.columns = df.columns.str.strip()
                 self.create_tab(df, os.path.basename(fname))
-                
                 if "Auto-detected" not in self.status_bar.currentMessage():
                     self.status_bar.showMessage(f"Loaded {fname} ({enc})")
-                    
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open {fname}\n{str(e)}")
 
@@ -325,9 +342,12 @@ class CSVForge(QMainWindow):
         view.setSortingEnabled(True)
         view.horizontalHeader().setStretchLastSection(True)
         
+        # Enable Right-Click Menu
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        view.customContextMenuRequested.connect(lambda pos: self.show_context_menu(pos, view))
+        
         idx = self.tabs.addTab(view, title)
         self.tabs.setCurrentIndex(idx)
-        # Update stats immediately
         self.update_footer_stats()
 
     def close_tab(self, index):
@@ -342,9 +362,7 @@ class CSVForge(QMainWindow):
 
     def save_csv(self):
         df = self.get_current_df()
-        if df is None:
-            return
-        
+        if df is None: return
         fname, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
         if fname:
             try:
@@ -353,222 +371,201 @@ class CSVForge(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not save file:\n{str(e)}")
 
+    # --- CONTEXT MENU & EDITING ---
+    def show_context_menu(self, pos, view):
+        menu = QMenu(self)
+        model = view.model()
+        index = view.indexAt(pos)
+        
+        # Selection logic
+        selected_rows = sorted(set(idx.row() for idx in view.selectionModel().selectedRows()))
+        
+        # --- Actions ---
+        
+        # 1. Add Row
+        add_row_act = QAction("Add Empty Row", self)
+        add_row_act.triggered.connect(lambda: [model.add_row(), self.update_footer_stats()])
+        menu.addAction(add_row_act)
+        
+        # 2. Add Column
+        add_col_act = QAction("Add Column...", self)
+        add_col_act.triggered.connect(lambda: self.prompt_add_column(model))
+        menu.addAction(add_col_act)
+        
+        menu.addSeparator()
+        
+        # 3. Delete Rows (if selected)
+        if selected_rows:
+            del_row_act = QAction(f"Delete {len(selected_rows)} Selected Row(s)", self)
+            del_row_act.triggered.connect(lambda: [model.remove_rows(selected_rows), self.update_footer_stats()])
+            menu.addAction(del_row_act)
+        
+        # 4. Column Operations (Rename/Delete) - based on the cell clicked
+        if index.isValid():
+            col_idx = index.column()
+            col_name = model.headerData(col_idx, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+            
+            menu.addSeparator()
+            
+            rename_act = QAction(f"Rename Column '{col_name}'...", self)
+            rename_act.triggered.connect(lambda: self.prompt_rename_column(model, col_idx, col_name))
+            menu.addAction(rename_act)
+            
+            del_col_act = QAction(f"Delete Column '{col_name}'", self)
+            del_col_act.triggered.connect(lambda: [model.remove_column(col_idx), self.update_footer_stats()])
+            menu.addAction(del_col_act)
+
+        menu.exec(view.viewport().mapToGlobal(pos))
+
+    def prompt_add_column(self, model):
+        name, ok = QInputDialog.getText(self, "Add Column", "New Column Name:")
+        if ok and name:
+            model.add_column(name)
+            self.update_footer_stats()
+
+    def prompt_rename_column(self, model, col_idx, old_name):
+        name, ok = QInputDialog.getText(self, "Rename Column", "New Name:", text=old_name)
+        if ok and name:
+            model.rename_column(col_idx, name)
+
     # --- TOOLS IMPLEMENTATION ---
     def tool_combiner(self):
-        fnames, _ = QFileDialog.getOpenFileNames(self, "Select CSVs to Append", "", "CSV Files (*.csv)")
+        fnames, _ = QFileDialog.getOpenFileNames(self, "Select CSVs", "", "CSV (*.csv)")
         if not fnames: return
-
         dfs = []
-        current_df = self.get_current_df()
-        if current_df is not None:
-            reply = QMessageBox.question(self, "Append?", "Append selected files to the currently open table?", 
-                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
-                dfs.append(current_df)
-
-        self.progress.setVisible(True)
-        self.progress.setValue(0)
+        if self.get_current_df() is not None:
+            if QMessageBox.question(self, "Append?", "Append to current table?") == QMessageBox.StandardButton.Yes:
+                dfs.append(self.get_current_df())
         
+        self.progress.setVisible(True)
         try:
-            count = len(fnames)
             for i, f in enumerate(fnames):
-                enc = self.detect_encoding(f)
-                d = pd.read_csv(f, encoding=enc)
+                d = pd.read_csv(f, encoding=self.detect_encoding(f))
                 d['source_file'] = os.path.basename(f)
                 dfs.append(d)
-                self.progress.setValue(int((i+1)/count * 100))
-            
-            combined = pd.concat(dfs, ignore_index=True)
-            self.create_tab(combined, "Combined_Result")
-            self.status_bar.showMessage(f"Combined {len(dfs)} sources. Total rows: {len(combined)}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-        finally:
-            self.progress.setVisible(False)
+                self.progress.setValue(int((i+1)/len(fnames)*100))
+            self.create_tab(pd.concat(dfs, ignore_index=True), "Combined")
+        except Exception as e: QMessageBox.critical(self, "Error", str(e))
+        finally: self.progress.setVisible(False)
 
     def tool_splitter(self):
         df = self.get_current_df()
-        if df is None:
-            QMessageBox.warning(self, "Warning", "No CSV open to split.")
-            return
-
-        rows, ok = QInputDialog.getInt(self, "Split CSV", "Rows per file:", 1000, 1, 1000000)
-        
+        if df is None: return
+        rows, ok = QInputDialog.getInt(self, "Split", "Rows per file:", 1000, 1)
         if ok:
-            dir_path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
-            if dir_path:
-                self.progress.setVisible(True)
-                total_rows = len(df)
-                chunks = (total_rows // rows) + 1
-                
+            d = QFileDialog.getExistingDirectory(self, "Output Dir")
+            if d:
                 try:
-                    for i in range(chunks):
-                        start = i * rows
-                        end = start + rows
-                        chunk = df.iloc[start:end]
-                        if not chunk.empty:
-                            chunk.to_csv(os.path.join(dir_path, f"split_{i+1}.csv"), index=False)
-                        self.progress.setValue(int((i+1)/chunks * 100))
-                    
-                    QMessageBox.information(self, "Success", f"Split into {chunks} files in {dir_path}")
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", str(e))
-                finally:
-                    self.progress.setVisible(False)
+                    for i in range((len(df)//rows)+1):
+                        df.iloc[i*rows:(i+1)*rows].to_csv(os.path.join(d, f"split_{i+1}.csv"), index=False)
+                    QMessageBox.information(self, "Done", "Split complete")
+                except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
     def tool_joiner(self):
-        left_df = self.get_current_df()
-        if left_df is None:
-            QMessageBox.warning(self, "Warning", "Open the Main (Left) CSV first.")
-            return
-
-        fname, _ = QFileDialog.getOpenFileName(self, "Select Second (Right) CSV", "", "CSV Files (*.csv)")
+        left = self.get_current_df()
+        if left is None: return
+        fname, _ = QFileDialog.getOpenFileName(self, "Right CSV", "", "CSV (*.csv)")
         if not fname: return
-
         try:
-            enc = self.detect_encoding(fname)
-            right_df = pd.read_csv(fname, encoding=enc)
-            right_df.columns = right_df.columns.str.strip()
+            right = pd.read_csv(fname, encoding=self.detect_encoding(fname))
+            right.columns = right.columns.str.strip()
+            d = JoinDialog(left.columns, right.columns, self)
+            if d.exec():
+                l, r, t = d.get_data()
+                if l == r: res = pd.merge(left, right, on=l, how=t)
+                else: res = pd.merge(left, right, left_on=l, right_on=r, how=t)
+                self.create_tab(res, f"Join_{t}")
+        except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
-            dialog = JoinDialog(left_df.columns, right_df.columns, self)
-            if dialog.exec():
-                l_col, r_col, j_type = dialog.get_data()
-                if l_col == r_col:
-                    result = pd.merge(left_df, right_df, on=l_col, how=j_type)
-                else:
-                    result = pd.merge(left_df, right_df, left_on=l_col, right_on=r_col, how=j_type)
-                self.create_tab(result, f"Join_{j_type}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+    def tool_remove_duplicates(self):
+        df = self.get_current_df()
+        if df is None: return
+        col, ok = QInputDialog.getItem(self, "Deduplicate", "Column:", df.columns.tolist(), 0, False)
+        if ok:
+            if QMessageBox.question(self, "Confirm", "Keep first occurrence only?") == QMessageBox.StandardButton.Yes:
+                try:
+                    before = len(df)
+                    df.drop_duplicates(subset=[col], keep='first', inplace=True)
+                    df.reset_index(drop=True, inplace=True)
+                    # Force refresh
+                    self.tabs.currentWidget().model().layoutChanged.emit()
+                    self.update_footer_stats()
+                    QMessageBox.information(self, "Done", f"Removed {before - len(df)} rows.")
+                except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
     def tool_fuzzy_dedupe(self):
         df = self.get_current_df()
-        if df is None:
-            QMessageBox.warning(self, "Warning", "No data to scan.")
-            return
+        if df is None: return
+        col, ok = QInputDialog.getItem(self, "Fuzzy Dedupe", "Column:", df.columns.tolist(), 0, False)
+        if not ok: return
+        thresh, ok = QInputDialog.getDouble(self, "Threshold", "0.0-1.0:", 0.8, 0, 1, 2)
+        if not ok: return
 
-        col, ok_col = QInputDialog.getItem(self, "Column Selection", "Select Column to check for duplicates:", df.columns.tolist(), 0, False)
-        if not ok_col: return
-        
-        thresh, ok_thresh = QInputDialog.getDouble(self, "Similarity Threshold", "Threshold (0.0 - 1.0):", 0.8, 0.0, 1.0, 2)
-        if not ok_thresh: return
-
-        self.status_bar.showMessage("Running detailed fuzzy analysis...")
         self.progress.setVisible(True)
         QApplication.processEvents()
-        
         try:
-            records = df.to_dict('records')
-            columns = df.columns.tolist()
+            recs = df.to_dict('records')
+            cols = df.columns.tolist()
             matches = []
-            total_records = len(records)
-            
-            for i in range(total_records):
-                if i % 20 == 0: 
-                    self.progress.setValue(int(i/total_records*100))
+            for i in range(len(recs)):
+                if i % 50 == 0: 
+                    self.progress.setValue(int(i/len(recs)*100))
                     QApplication.processEvents()
-                    
-                for j in range(i + 1, total_records):
-                    s1 = str(records[i].get(col, ''))
-                    s2 = str(records[j].get(col, ''))
-                    
-                    if not s1 or not s2 or s1 == 'nan' or s2 == 'nan': continue
-
+                for j in range(i+1, len(recs)):
+                    s1, s2 = str(recs[i].get(col,'')), str(recs[j].get(col,''))
+                    if not s1 or not s2 or s1=='nan' or s2=='nan': continue
                     ratio = SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
-                    
                     if ratio >= thresh:
-                        match_row = {
-                            'Row_Index_1': i + 2,
-                            'Row_Index_2': j + 2,
-                            'Similarity_Score': f"{ratio:.2%}",
-                        }
-                        for field in columns: match_row[f"{field}_1"] = records[i].get(field, '')
-                        for field in columns: match_row[f"{field}_2"] = records[j].get(field, '')
-                        match_row['Action'] = 'REVIEW'
-                        matches.append(match_row)
+                        row = {'Row_1': i+2, 'Row_2': j+2, 'Score': f"{ratio:.2%}", 'Action': 'REVIEW'}
+                        for c in cols: row[f"{c}_1"] = recs[i].get(c,'')
+                        for c in cols: row[f"{c}_2"] = recs[j].get(c,'')
+                        matches.append(row)
             
             if matches:
-                cols_ordered = ['Row_Index_1', 'Row_Index_2', 'Similarity_Score']
-                cols_ordered += [f"{c}_1" for c in columns]
-                cols_ordered += [f"{c}_2" for c in columns]
-                cols_ordered.append('Action')
-                
-                result_df = pd.DataFrame(matches)
-                result_df = result_df[cols_ordered]
-                self.create_tab(result_df, "Fuzzy_Duplicates_Detailed")
-                QMessageBox.information(self, "Complete", f"Found {len(matches)} potential duplicates.")
-            else:
-                QMessageBox.information(self, "Result", "No fuzzy duplicates found above threshold.")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-        finally:
-            self.progress.setValue(0)
-            self.progress.setVisible(False)
-            self.status_bar.clearMessage()
+                final_cols = ['Row_1', 'Row_2', 'Score'] + [f"{c}_1" for c in cols] + [f"{c}_2" for c in cols] + ['Action']
+                self.create_tab(pd.DataFrame(matches)[final_cols], "Fuzzy_Dupes")
+            else: QMessageBox.information(self, "Result", "No duplicates found.")
+        except Exception as e: QMessageBox.critical(self, "Error", str(e))
+        finally: self.progress.setVisible(False)
 
     def tool_fuzzy_match(self):
-        df_target = self.get_current_df()
-        if df_target is None:
-            QMessageBox.warning(self, "Warning", "Open the Target CSV first.")
-            return
-
-        fname, _ = QFileDialog.getOpenFileName(self, "Select Master List CSV", "", "CSV Files (*.csv)")
+        target = self.get_current_df()
+        if target is None: return
+        fname, _ = QFileDialog.getOpenFileName(self, "Master CSV", "", "CSV (*.csv)")
         if not fname: return
-        
         try:
-            enc = self.detect_encoding(fname)
-            df_master = pd.read_csv(fname, encoding=enc)
-
-            col_target, ok1 = QInputDialog.getItem(self, "Match Configuration", "Select Column in CURRENT tab:", df_target.columns.tolist(), 0, False)
+            master = pd.read_csv(fname, encoding=self.detect_encoding(fname))
+            c_t, ok1 = QInputDialog.getItem(self, "Target Col", "Current Table:", target.columns.tolist(), 0, False)
             if not ok1: return
-            col_master, ok2 = QInputDialog.getItem(self, "Match Configuration", "Select Column in MASTER file:", df_master.columns.tolist(), 0, False)
+            c_m, ok2 = QInputDialog.getItem(self, "Master Col", "Master Table:", master.columns.tolist(), 0, False)
             if not ok2: return
-
-            thresh, ok3 = QInputDialog.getDouble(self, "Similarity", "Threshold:", 0.8, 0.1, 1.0, 2)
+            thresh, ok3 = QInputDialog.getDouble(self, "Threshold", "0.0-1.0:", 0.8, 0, 1, 2)
             if not ok3: return
 
-            self.status_bar.showMessage("Matching...")
             self.progress.setVisible(True)
             QApplication.processEvents()
+            res = []
+            m_vals = master[c_m].dropna().astype(str).tolist()
             
-            results = []
-            master_lookup = df_master[col_master].dropna().astype(str).tolist()
-            total = len(df_target)
+            for i, row in target.iterrows():
+                if i % 10 == 0: self.progress.setValue(int(i/len(target)*100))
+                t_val = str(row[c_t])
+                best_r, best_v = 0, None
+                for m in m_vals:
+                    r = SequenceMatcher(None, t_val.lower(), m.lower()).ratio()
+                    if r > best_r: best_r, best_v = r, m
+                
+                d = row.to_dict()
+                d['Match_Status'] = "Exact" if best_r==1.0 else ("Fuzzy" if best_r>=thresh else "No Match")
+                d['Best_Match'] = best_v if best_r>=thresh else None
+                d['Score'] = round(best_r, 3)
+                res.append(d)
             
-            for idx, row in df_target.iterrows():
-                if idx % 10 == 0: self.progress.setValue(int(idx/total * 100))
-                
-                target_val = str(row[col_target])
-                best_ratio = 0
-                best_match = None
-                
-                for m_val in master_lookup:
-                    ratio = SequenceMatcher(None, target_val.lower(), m_val.lower()).ratio()
-                    if ratio > best_ratio:
-                        best_ratio = ratio
-                        best_match = m_val
-                
-                match_status = "Exact" if best_ratio == 1.0 else ("Fuzzy" if best_ratio >= thresh else "No Match")
-                
-                row_data = row.to_dict()
-                row_data['Match_Status'] = match_status
-                row_data['Best_Match_Found'] = best_match if best_ratio >= thresh else None
-                row_data['Similarity_Score'] = round(best_ratio, 3)
-                results.append(row_data)
-
-            result_df = pd.DataFrame(results)
-            self.create_tab(result_df, "Matched_Results")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-        finally:
-            self.progress.setValue(0)
-            self.progress.setVisible(False)
-            self.status_bar.clearMessage()
+            self.create_tab(pd.DataFrame(res), "Matched_Results")
+        except Exception as e: QMessageBox.critical(self, "Error", str(e))
+        finally: self.progress.setVisible(False)
 
 if __name__ == "__main__":
-    intro
     app = QApplication(sys.argv)
     window = CSVForge()
     window.show()
