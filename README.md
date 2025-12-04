@@ -2,7 +2,7 @@
 
 > The All-in-One CSV Manipulation Toolkit.
 
-CSV Forge is a robust, dark-mode GUI application built with Python and PyQt6. It is designed to replace the need for writing one-off data processing scripts. It provides a spreadsheet-like interface for viewing, editing, merging, cleaning, and analyzing CSV files of any size.
+CSV Forge is a robust, dark-mode GUI application built with Python and PyQt5. It is designed to replace the need for writing one-off data processing scripts. It provides a spreadsheet-like interface for viewing, editing, merging, cleaning, and analyzing CSV files of any size.
 
 ## 🚀 Key Features
 
@@ -43,7 +43,7 @@ CSV Forge is a robust, dark-mode GUI application built with Python and PyQt6. It
 Install the required libraries using pip:
 
 ```python
-pip install pandas PyQt6
+pip install pandas PyQt5
 ```
 
 
