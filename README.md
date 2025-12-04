@@ -28,6 +28,10 @@ CSV Forge is a robust, dark-mode GUI application built with Python and PyQt6. It
 **Column Math:** Perform arithmetic (+, -, *, /) between columns or using constant numbers.
 **Concatenation:** Merge multiple columns into one (e.g., First + Last = Full Name).
 
+## Releases
+
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/BgWv3/csv-forge)
+
 ## 📦 Installation
 
 ### Prerequisites

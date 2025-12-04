@@ -1,6 +1,7 @@
 import sys
 import csv
 import os
+import time
 from difflib import SequenceMatcher
 
 import pandas as pd
@@ -10,10 +11,85 @@ from PyQt6.QtWidgets import (
     QTabWidget, QDockWidget, QPushButton, QLabel, QComboBox, 
     QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QProgressBar,
     QHeaderView, QMenu, QInputDialog, QAbstractItemView, 
-    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup, QLineEdit
+    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup, QLineEdit,
+    QTextBrowser, QSplashScreen
 )
-from PyQt6.QtCore import Qt, QAbstractTableModel
-from PyQt6.QtGui import QAction, QColor, QPalette
+from PyQt6.QtCore import Qt, QAbstractTableModel, QSize, QTimer
+from PyQt6.QtGui import (
+    QAction, QColor, QPalette, QPixmap, QPainter, 
+    QFont, QIcon, QBrush, QPen
+)
+
+# =============================================================================
+# APP CONFIGURATION
+# =============================================================================
+APP_NAME = "CSV Forge"
+VERSION = "1.2.0"
+
+# =============================================================================
+# ASSET GENERATORS (Programmatic Icon/Splash)
+# =============================================================================
+def create_app_icon():
+    """Generates a modern icon in memory so no external .ico file is needed"""
+    size = 128
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    
+    # Draw Background Container
+    brush = QBrush(QColor("#2a82da")) # CSV Forge Blue
+    painter.setBrush(brush)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawRoundedRect(0, 0, size, size, 20, 20)
+    
+    # Draw Text
+    painter.setPen(QColor("white"))
+    font = QFont("Arial", 40, QFont.Weight.Bold)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "CSV")
+    
+    painter.end()
+    return QIcon(pixmap)
+
+def create_splash_pixmap():
+    """Generates a splash screen image in memory"""
+    width, height = 500, 300
+    pixmap = QPixmap(width, height)
+    pixmap.fill(QColor("#2b2b2b")) # Dark Grey Background
+    
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    
+    # Draw Border
+    pen = QPen(QColor("#2a82da"))
+    pen.setWidth(4)
+    painter.setPen(pen)
+    painter.drawRect(0, 0, width, height)
+    
+    # Draw App Name
+    painter.setPen(QColor("white"))
+    title_font = QFont("Arial", 36, QFont.Weight.Bold)
+    painter.setFont(title_font)
+    text_rect = pixmap.rect()
+    text_rect.setBottom(text_rect.bottom() - 50)
+    painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, APP_NAME)
+    
+    # Draw Version
+    painter.setPen(QColor("#888888"))
+    ver_font = QFont("Arial", 12)
+    painter.setFont(ver_font)
+    painter.drawText(width - 100, height - 20, f"v{VERSION}")
+    
+    # Draw Loading Text
+    painter.setPen(QColor("#2a82da"))
+    loading_font = QFont("Arial", 10, QFont.Weight.Bold)
+    painter.setFont(loading_font)
+    painter.drawText(20, height - 20, "Initializing Toolkit...")
+    
+    painter.end()
+    return pixmap
 
 # =============================================================================
 # PANDAS TABLE MODEL
@@ -40,11 +116,9 @@ class DataFrameModel(QAbstractTableModel):
     def setData(self, index, value, role):
         if role == Qt.ItemDataRole.EditRole:
             try:
-                # Convert empty string to None
                 if value == "":
                     val = None
                 else:
-                    # Try to preserve numeric type if possible
                     try:
                         if '.' in value: val = float(value)
                         else: val = int(value)
@@ -80,7 +154,6 @@ class DataFrameModel(QAbstractTableModel):
     def get_dataframe(self):
         return self._df
 
-    # --- Editing Methods ---
     def add_row(self):
         self.layoutAboutToBeChanged.emit()
         new_index = len(self._df)
@@ -114,6 +187,63 @@ class DataFrameModel(QAbstractTableModel):
 # =============================================================================
 # DIALOGS
 # =============================================================================
+class HelpDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} - User Guide")
+        self.resize(700, 600)
+        layout = QVBoxLayout(self)
+        
+        self.text_browser = QTextBrowser()
+        self.text_browser.setHtml(f"""
+            <h1 style="color: #2a82da;">{APP_NAME} <span style="font-size: 14px; color: #666;">v{VERSION}</span></h1>
+            <p>Your all-in-one toolkit for manipulating CSV files.</p>
+            
+            <hr>
+            
+            <h3>🚀 Getting Started</h3>
+            <ul>
+                <li><b>Open File:</b> Use <i>File > Open</i> or the toolbar button. We auto-detect encoding.</li>
+                <li><b>Save File:</b> Use <i>File > Save Current Tab</i> to save your work.</li>
+                <li><b>Edit Data:</b> Double-click any cell to edit it directly.</li>
+            </ul>
+
+            <h3>🛠️ Toolbox Functions (Sidebar)</h3>
+            
+            <p><b>1. File Operations</b></p>
+            <ul>
+                <li><b>Combiner:</b> Stack multiple CSV files vertically into one large dataset.</li>
+                <li><b>Splitter:</b> Break a large file into smaller chunks (e.g., 1000 rows each).</li>
+                <li><b>Joiner:</b> SQL-style merge. Connect two files based on a common ID column.</li>
+                <li><b>Remove Exact Duplicates:</b> Delete rows that are identical in a specific column.</li>
+            </ul>
+
+            <p><b>2. Fuzzy Logic</b></p>
+            <ul>
+                <li><b>Fuzzy Dedupe:</b> Scans the <i>current</i> file for typos/duplicates (e.g., "Jon Doe" vs "John Doe").</li>
+                <li><b>Fuzzy Match:</b> Compare the <i>current</i> file against an external "Master List" to find best matches.</li>
+            </ul>
+
+            <p><b>3. Calculations</b></p>
+            <ul>
+                <li><b>Concatenate:</b> Combine two or more columns into one (e.g., Address + City).</li>
+                <li><b>Column Math:</b> Perform math (+, -, *, /) on a column.</li>
+            </ul>
+
+            <hr>
+            
+            <h3>🖱️ Mouse Shortcuts</h3>
+            <ul>
+                <li><b>Right-Click Table:</b> Context menu to Add/Delete Rows or Columns.</li>
+                <li><b>Right-Click Header:</b> Context menu to Rename/Delete Columns.</li>
+            </ul>
+        """)
+        layout.addWidget(self.text_browser)
+        
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
+
 class JoinDialog(QDialog):
     def __init__(self, left_cols, right_cols, parent=None):
         super().__init__(parent)
@@ -145,7 +275,6 @@ class ConcatDialog(QDialog):
         self.setWindowTitle("Concatenate Columns")
         self.resize(400, 500)
         layout = QVBoxLayout(self)
-
         layout.addWidget(QLabel("Select columns to combine (in order):"))
         self.col_list = QListWidget()
         for col in columns:
@@ -153,16 +282,13 @@ class ConcatDialog(QDialog):
             item.setCheckState(Qt.CheckState.Unchecked)
             self.col_list.addItem(item)
         layout.addWidget(self.col_list)
-
         form = QFormLayout()
         self.sep_input = QLineEdit()
         self.sep_input.setPlaceholderText("e.g. ' ' or '-' or leave empty")
         self.name_input = QLineEdit("New_Column")
-        
         form.addRow("Separator:", self.sep_input)
         form.addRow("New Column Name:", self.name_input)
         layout.addLayout(form)
-
         btns = QHBoxLayout()
         ok = QPushButton("Create")
         ok.clicked.connect(self.accept)
@@ -171,7 +297,6 @@ class ConcatDialog(QDialog):
         btns.addWidget(ok)
         btns.addWidget(cancel)
         layout.addLayout(btns)
-
     def get_data(self):
         selected = []
         for i in range(self.col_list.count()):
@@ -185,61 +310,47 @@ class MathDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Column Math")
         layout = QVBoxLayout(self)
-
         form = QFormLayout()
-        
         self.new_col = QLineEdit("Result")
         self.col_a = QComboBox()
         self.col_a.addItems(columns)
         self.op = QComboBox()
         self.op.addItems(["+", "-", "*", "/"])
-        
-        # Operand B selection
         self.rb_col = QRadioButton("Column")
         self.rb_num = QRadioButton("Number")
         self.rb_col.setChecked(True)
         self.bg = QButtonGroup()
         self.bg.addButton(self.rb_col)
         self.bg.addButton(self.rb_num)
-        
         self.col_b = QComboBox()
         self.col_b.addItems(columns)
         self.num_b = QDoubleSpinBox()
         self.num_b.setRange(-999999999, 999999999)
         self.num_b.setVisible(False)
-        
-        # Toggle visibility
         self.rb_col.toggled.connect(lambda: self.toggle_b(True))
         self.rb_num.toggled.connect(lambda: self.toggle_b(False))
-
         form.addRow("New Column Name:", self.new_col)
         form.addRow("Column A:", self.col_a)
         form.addRow("Operator:", self.op)
-        
         b_layout = QHBoxLayout()
         b_layout.addWidget(self.rb_col)
         b_layout.addWidget(self.rb_num)
         form.addRow("Calculate with:", b_layout)
-        
         self.stack_widget = QWidget()
         self.stack_layout = QVBoxLayout(self.stack_widget)
         self.stack_layout.setContentsMargins(0,0,0,0)
         self.stack_layout.addWidget(self.col_b)
         self.stack_layout.addWidget(self.num_b)
         form.addRow("Operand B:", self.stack_widget)
-        
         layout.addLayout(form)
-
         btns = QHBoxLayout()
         ok = QPushButton("Calculate")
         ok.clicked.connect(self.accept)
         layout.addWidget(ok)
         layout.addLayout(btns)
-
     def toggle_b(self, is_col):
         self.col_b.setVisible(is_col)
         self.num_b.setVisible(not is_col)
-
     def get_data(self):
         mode = "col" if self.rb_col.isChecked() else "num"
         val_b = self.col_b.currentText() if mode == "col" else self.num_b.value()
@@ -251,18 +362,17 @@ class MathDialog(QDialog):
 class CSVForge(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CSV Forge - Advanced Toolkit")
+        self.setWindowTitle(f"{APP_NAME} v{VERSION} - Advanced Toolkit")
         self.resize(1200, 800)
+        self.setWindowIcon(create_app_icon())
         self.apply_dark_theme()
 
-        # State
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.update_footer_stats)
         self.setCentralWidget(self.tabs)
 
-        # Setup UI Components
         self.create_menu()
         self.create_toolbar()
         self.create_sidebar()
@@ -287,6 +397,8 @@ class CSVForge(QMainWindow):
 
     def create_menu(self):
         menu = self.menuBar()
+        
+        # File Menu
         file_menu = menu.addMenu("File")
         open_action = QAction("Open CSV...", self)
         open_action.triggered.connect(self.load_csv)
@@ -297,6 +409,12 @@ class CSVForge(QMainWindow):
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+        
+        # Help Menu
+        help_menu = menu.addMenu("Help")
+        guide_action = QAction("User Guide", self)
+        guide_action.triggered.connect(self.show_help)
+        help_menu.addAction(guide_action)
 
     def create_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
@@ -311,12 +429,10 @@ class CSVForge(QMainWindow):
     def create_sidebar(self):
         dock = QDockWidget("Toolbox", self)
         dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        
         widget = QWidget()
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Define your tools in Groups (Header Name, List of Tools)
         tool_groups = [
             ("File Operations", [
                 ("Combiner (Stack Files)", self.tool_combiner),
@@ -334,15 +450,10 @@ class CSVForge(QMainWindow):
             ])
         ]
 
-        # Loop through the groups
         for header, tools in tool_groups:
-            # 1. Add the Section Header
             lbl = QLabel(header)
-            # Styling: Bold, light grey text, with some top margin for spacing
             lbl.setStyleSheet("font-weight: bold; color: #aaa; margin-top: 15px; margin-bottom: 5px;")
             layout.addWidget(lbl)
-
-            # 2. Add the Buttons for this group
             for name, func in tools:
                 btn = QPushButton(name)
                 btn.setStyleSheet("""
@@ -398,7 +509,6 @@ class CSVForge(QMainWindow):
             self.lbl_cols.setText("Cols: 0")
             self.lbl_mem.setText("Mem: 0 MB")
 
-    # --- File Operations ---
     def detect_encoding(self, filepath):
         encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
         for enc in encodings:
@@ -476,10 +586,15 @@ class CSVForge(QMainWindow):
         if fname:
             try:
                 df.to_csv(fname, index=False)
+                new_title = os.path.basename(fname)
+                self.tabs.setTabText(self.tabs.currentIndex(), new_title)
                 self.status_bar.showMessage(f"Saved to {fname}")
             except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
-    # --- CONTEXT MENU ---
+    def show_help(self):
+        dialog = HelpDialog(self)
+        dialog.exec()
+
     def show_context_menu(self, pos, view):
         menu = QMenu(self)
         model = view.model()
@@ -525,7 +640,6 @@ class CSVForge(QMainWindow):
         if ok and name:
             model.rename_column(col_idx, name)
 
-    # --- TOOLS ---
     def tool_combiner(self):
         fnames, _ = QFileDialog.getOpenFileNames(self, "Select CSVs", "", "CSV (*.csv)")
         if not fnames: return
@@ -702,6 +816,23 @@ class CSVForge(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # 1. Show Splash Screen (generated in memory)
+    splash_pix = create_splash_pixmap()
+    splash = QSplashScreen(splash_pix, Qt.WindowType.WindowStaysOnTopHint)
+    splash.show()
+    
+    # Process events to ensure splash renders immediately
+    app.processEvents()
+    
+    # Simulate a small loading delay (optional, just for effect)
+    time.sleep(1.5)
+    
+    # 2. Launch Main Window
     window = CSVForge()
     window.show()
+    
+    # 3. Close Splash
+    splash.finish(window)
+    
     sys.exit(app.exec())
