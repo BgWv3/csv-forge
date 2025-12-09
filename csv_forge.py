@@ -24,7 +24,7 @@ from PyQt5.QtGui import (
 # APP CONFIGURATION
 # =============================================================================
 APP_NAME = "CSV Forge"
-VERSION = "1.3.1"  # Bumped version
+VERSION = "1.3.2"  # Bumped version for "Open on Launch" support
 
 # =============================================================================
 # ASSET GENERATORS
@@ -109,7 +109,6 @@ class DataFrameModel(QAbstractTableModel):
         if role == Qt.EditRole:
             try:
                 val = None if value == "" else value
-                # Simple type inference
                 if val:
                     try:
                         if '.' in val: val = float(val)
@@ -296,13 +295,12 @@ class MathDialog(QDialog):
 # MAIN WINDOW
 # =============================================================================
 class CSVForge(QMainWindow):
-    def __init__(self):
+    def __init__(self, file_to_open=None):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{VERSION}")
         self.resize(1200, 800)
         self.setWindowIcon(create_app_icon())
         
-        # Apply Styling
         self.apply_modern_theme()
 
         self.tabs = QTabWidget()
@@ -315,15 +313,13 @@ class CSVForge(QMainWindow):
         self.create_toolbar()
         self.create_sidebar()
         self.create_statusbar()
+        
+        # Check if file was passed during initialization (Double-Click Launch)
+        if file_to_open and os.path.exists(file_to_open):
+            self.load_specific_file(file_to_open)
 
     def apply_modern_theme(self):
-        """
-        Applies the Fusion style and overrides it with a custom QSS (StyleSheet)
-        to fix the ugly default look of PyQt5 on Windows.
-        """
         QApplication.setStyle("Fusion")
-        
-        # 1. Set the base palette (Classic Dark Mode colors)
         palette = QPalette()
         palette.setColor(QPalette.Window, QColor(53, 53, 53))
         palette.setColor(QPalette.WindowText, Qt.white)
@@ -340,109 +336,27 @@ class CSVForge(QMainWindow):
         palette.setColor(QPalette.HighlightedText, Qt.black)
         QApplication.setPalette(palette)
 
-        # 2. Apply advanced QSS for cleaner, flatter look
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #353535;
-            }
-            QToolTip { 
-                color: #ffffff; 
-                background-color: #2a2a2a; 
-                border: 1px solid white; 
-            }
-            /* Menus and Toolbars */
-            QMenuBar {
-                background-color: #353535;
-                color: white;
-            }
-            QMenuBar::item:selected {
-                background-color: #3d72b4;
-            }
-            QMenu {
-                background-color: #2b2b2b;
-                color: white;
-                border: 1px solid #555;
-            }
-            QMenu::item:selected {
-                background-color: #3d72b4;
-            }
-            
-            /* Table View */
-            QTableView {
-                background-color: #252525;
-                gridline-color: #444;
-                color: #ddd;
-                selection-background-color: #3d72b4;
-                selection-color: white;
-            }
-            QHeaderView::section {
-                background-color: #353535;
-                color: white;
-                padding: 4px;
-                border: 1px solid #444;
-            }
-            
-            /* Tabs */
-            QTabWidget::pane { 
-                border: 1px solid #444; 
-            }
-            QTabBar::tab {
-                background: #353535;
-                color: #aaa;
-                padding: 8px 16px;
-                border: 1px solid #444;
-                border-bottom: none;
-            }
-            QTabBar::tab:selected {
-                background: #252525;
-                color: white;
-                border-top: 2px solid #3d72b4;
-            }
-            
-            /* Buttons and Inputs */
-            QPushButton {
-                background-color: #444;
-                border: 1px solid #555;
-                color: white;
-                padding: 6px 12px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #505050;
-                border: 1px solid #3d72b4;
-            }
-            QPushButton:pressed {
-                background-color: #3d72b4;
-            }
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-                background-color: #252525;
-                border: 1px solid #555;
-                color: white;
-                padding: 4px;
-                border-radius: 3px;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            
-            /* Scrollbars */
-            QScrollBar:vertical {
-                border: none;
-                background: #2b2b2b;
-                width: 10px;
-                margin: 0;
-            }
-            QScrollBar::handle:vertical {
-                background: #555;
-                min-height: 20px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #3d72b4;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
+            QMainWindow { background-color: #353535; }
+            QToolTip { color: #ffffff; background-color: #2a2a2a; border: 1px solid white; }
+            QMenuBar { background-color: #353535; color: white; }
+            QMenuBar::item:selected { background-color: #3d72b4; }
+            QMenu { background-color: #2b2b2b; color: white; border: 1px solid #555; }
+            QMenu::item:selected { background-color: #3d72b4; }
+            QTableView { background-color: #252525; gridline-color: #444; color: #ddd; selection-background-color: #3d72b4; selection-color: white; }
+            QHeaderView::section { background-color: #353535; color: white; padding: 4px; border: 1px solid #444; }
+            QTabWidget::pane { border: 1px solid #444; }
+            QTabBar::tab { background: #353535; color: #aaa; padding: 8px 16px; border: 1px solid #444; border-bottom: none; }
+            QTabBar::tab:selected { background: #252525; color: white; border-top: 2px solid #3d72b4; }
+            QPushButton { background-color: #444; border: 1px solid #555; color: white; padding: 6px 12px; border-radius: 4px; }
+            QPushButton:hover { background-color: #505050; border: 1px solid #3d72b4; }
+            QPushButton:pressed { background-color: #3d72b4; }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background-color: #252525; border: 1px solid #555; color: white; padding: 4px; border-radius: 3px; }
+            QComboBox::drop-down { border: none; }
+            QScrollBar:vertical { border: none; background: #2b2b2b; width: 10px; margin: 0; }
+            QScrollBar::handle:vertical { background: #555; min-height: 20px; border-radius: 5px; }
+            QScrollBar::handle:vertical:hover { background: #3d72b4; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
 
     def create_menu(self):
@@ -452,7 +366,6 @@ class CSVForge(QMainWindow):
         file_menu.addAction("Save Current Tab", self.save_csv)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
-        
         help_menu = menu.addMenu("Help")
         help_menu.addAction("User Guide", self.show_help)
 
@@ -460,27 +373,21 @@ class CSVForge(QMainWindow):
         toolbar = QToolBar("Main Toolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
-        
         btn_open = QAction("📂 Open", self)
         btn_open.triggered.connect(self.load_csv)
         toolbar.addAction(btn_open)
-        
         btn_save = QAction("💾 Save", self)
         btn_save.triggered.connect(self.save_csv)
         toolbar.addAction(btn_save)
 
     def create_sidebar(self):
         dock = QDockWidget("Toolbox", self)
-        
-        # CHANGED: Allow moving and floating, but disable Closing
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        
         dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         widget = QWidget()
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop)
 
-        # Updated Sidebar Styling for Buttons
         sidebar_btn_style = """
             QPushButton {
                 text-align: left;
@@ -531,34 +438,18 @@ class CSVForge(QMainWindow):
     def create_statusbar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        
-        # Stats Labels
         self.lbl_rows = QLabel("Rows: 0")
         self.lbl_cols = QLabel("Cols: 0")
         self.lbl_mem = QLabel("Mem: 0 MB")
-        
         lbl_style = "color: #aaa; padding: 0 10px; font-family: monospace;"
         self.lbl_rows.setStyleSheet(lbl_style)
         self.lbl_cols.setStyleSheet(lbl_style)
         self.lbl_mem.setStyleSheet(lbl_style)
-        
         self.status_bar.addPermanentWidget(self.lbl_rows)
         self.status_bar.addPermanentWidget(self.lbl_cols)
         self.status_bar.addPermanentWidget(self.lbl_mem)
-        
         self.progress = QProgressBar()
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #555;
-                border-radius: 2px;
-                text-align: center;
-                background: #252525;
-                color: white;
-            }
-            QProgressBar::chunk {
-                background-color: #3d72b4;
-            }
-        """)
+        self.progress.setStyleSheet("QProgressBar { border: 1px solid #555; border-radius: 2px; text-align: center; background: #252525; color: white; } QProgressBar::chunk { background-color: #3d72b4; }")
         self.progress.setFixedWidth(150)
         self.progress.setVisible(False)
         self.status_bar.addPermanentWidget(self.progress)
@@ -576,7 +467,6 @@ class CSVForge(QMainWindow):
             self.lbl_cols.setText("Cols: 0")
             self.lbl_mem.setText("Mem: 0 MB")
 
-    # --- Core Logic ---
     def detect_encoding(self, filepath):
         encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
         for enc in encodings:
@@ -598,25 +488,29 @@ class CSVForge(QMainWindow):
             return best_r if max_c > 0 else None
         except: return None
 
+    # NEW METHOD: Load specific file directly (Refactored logic)
+    def load_specific_file(self, fname):
+        try:
+            enc = self.detect_encoding(fname)
+            try:
+                df = pd.read_csv(fname, encoding=enc)
+            except:
+                skip = self.find_valid_header_row(fname, enc)
+                if skip: 
+                    df = pd.read_csv(fname, encoding=enc, skiprows=skip)
+                    self.status_bar.showMessage(f"Auto-detected header at row {skip+1}")
+                else: raise
+            df.columns = df.columns.str.strip()
+            self.create_tab(df, os.path.basename(fname))
+            if "Auto" not in self.status_bar.currentMessage():
+                self.status_bar.showMessage(f"Loaded {fname}")
+        except Exception as e: QMessageBox.critical(self, "Error", f"Could not load file:\n{str(e)}")
+
     def load_csv(self):
         fnames, _ = QFileDialog.getOpenFileNames(self, "Open CSV", "", "CSV Files (*.csv)")
         if not fnames: return
         for fname in fnames:
-            try:
-                enc = self.detect_encoding(fname)
-                try:
-                    df = pd.read_csv(fname, encoding=enc)
-                except:
-                    skip = self.find_valid_header_row(fname, enc)
-                    if skip: 
-                        df = pd.read_csv(fname, encoding=enc, skiprows=skip)
-                        self.status_bar.showMessage(f"Auto-detected header at row {skip+1}")
-                    else: raise
-                df.columns = df.columns.str.strip()
-                self.create_tab(df, os.path.basename(fname))
-                if "Auto" not in self.status_bar.currentMessage():
-                    self.status_bar.showMessage(f"Loaded {fname}")
-            except Exception as e: QMessageBox.critical(self, "Error", f"Could not load file:\n{str(e)}")
+            self.load_specific_file(fname)
 
     def create_tab(self, df, title):
         view = QTableView()
@@ -624,7 +518,7 @@ class CSVForge(QMainWindow):
         view.setModel(model)
         view.setSortingEnabled(True)
         view.horizontalHeader().setStretchLastSection(True)
-        view.setAlternatingRowColors(True) # Stripe effect
+        view.setAlternatingRowColors(True)
         view.setContextMenuPolicy(Qt.CustomContextMenu)
         view.customContextMenuRequested.connect(lambda pos: self.show_context_menu(pos, view))
         self.tabs.addTab(view, title)
@@ -846,7 +740,16 @@ if __name__ == "__main__":
     app.processEvents()
     time.sleep(1.2)
     
-    window = CSVForge()
+    # CHECK FOR FILE ARGUMENTS (This is the fix for double-clicking a CSV)
+    file_to_open = None
+    if len(sys.argv) > 1:
+        # sys.argv[0] is the script/exe name
+        # sys.argv[1] is the file path Windows passes in
+        potential_file = sys.argv[1]
+        if os.path.exists(potential_file) and potential_file.lower().endswith('.csv'):
+            file_to_open = potential_file
+
+    window = CSVForge(file_to_open)
     window.show()
     splash.finish(window)
     sys.exit(app.exec_())
